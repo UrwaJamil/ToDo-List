@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// Each user can only read/write their own profile (users/{uid}) and their
+// own tasks (users/{uid}/tasks/{taskId}). emails/{email} is a lookup used by
+// the Sign-Up availability check. Everything else is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      allow read, delete: if isOwner(userId);
+      // A profile must never contain a password.
+      allow create, update: if isOwner(userId)
+        && !request.resource.data.keys().hasAny(['password']);
+
+      match /tasks/{taskId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create, update: if isOwner(userId)
+          && request.resource.data.userId == userId
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 100
+          && request.resource.data.isCompleted is bool
+          && request.resource.data.priority in ['low', 'medium', 'high']
+          && request.resource.data.dueDate is timestamp;
+      }
+    }
+
+    // emails/{email} → { uid, createdAt }. Lets Sign-Up check whether an
+    // email is taken before anyone is logged in. A single document can be
+    // read, but the collection can never be listed.
+    match /emails/{email} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if request.auth != null
+        && request.auth.token.email != null
+        && email == request.auth.token.email.lower()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['uid', 'createdAt']);
+      allow update, delete: if false;
+    }
+
+    // Deny everything that is not matched above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
